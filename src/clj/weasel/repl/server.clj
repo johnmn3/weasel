@@ -1,55 +1,76 @@
 (ns weasel.repl.server
-  (:require [org.httpkit.server :as http :refer [on-close on-receive with-channel]])
-  (:import [java.io IOException]))
+  (:import [java.nio ByteBuffer]
+           [java.io BufferedReader IOException]
+           [org.java_websocket.client WebSocketClient]
+           [org.java_websocket.server WebSocketServer]))
 
-(defonce state (atom {:server nil
-                      :channel nil      ; when the server starts, a
-                                        ; promise that derefs to a
-                                        ; channel when a client
-                                        ; connects
-                      :response-fn nil}))
 
-(defn handler [request]
-  (if-not (:websocket? request)
-    {:status 200 :body "Please connect with a websocket!"}
-    (with-channel request channel
-      (if (realized? (:channel @state))
-        (do
-          (http/send! channel (pr-str {:op :error, :type :occupied}))
-          (http/close channel))
-        (do
-          (deliver (:channel @state) channel)
-          (on-close channel (fn [_] (swap! state assoc :channel (promise))))
-          (on-receive channel (:response-fn @state)))))))
+(defn ws-server-impl [host port open error close str-msg bb-msg start]
+  (proxy [WebSocketServer] [(java.net.InetSocketAddress. host port #_ (read-string port))]
+    (onOpen [client client-handshake]
+      (open {:client client :client-handshake client-handshake}))
+    (onClose [client code reason remote]
+      (close {:client client :code code :reason reason :remote remote})
+      (.close client))
+    (onMessage [client msg]
+      (condp instance? msg
+        String (str-msg {:client client :msg msg})
+        ByteBuffer (bb-msg {:client client :msg msg})))
+    (onError [client ex]
+      (error {:client client :ex ex}))
+    (onStart []
+      (when start
+        (start)))))
+
+;; state
+(defonce state
+  (atom {:server nil
+         :clients nil
+         :started nil}))
+
+(defn server [host port & args]
+  (let [{:keys [open error close str-msg bb-msg start]
+         :or {close (fn [{:keys [client]}]
+                      (swap! state update :clients #(remove #{client} %)))
+              open (fn [{:keys [client]}]
+                     (-> (swap! state update :clients conj
+                            {:ws client :id (gensym "client")})
+                      :started (deliver true)))
+              str-msg (fn [{:keys [msg]}] (println "from client:" msg))
+              bb-msg str-msg
+              error (fn [{:keys [client ex]}] (println client "sent error:" ex))}}
+
+        (apply hash-map args)
+        ws (ws-server-impl host port open error close str-msg bb-msg start)]
+    (future (.run ws))
+    ws))
 
 (defn send!
-  [msg]
-  (if-let [channel (:channel @state)]
-    (http/send! (deref channel) msg)
-    (throw (IOException. "WebSocket server not started!"))))
-
-(defn channel []
-  (:channel @state))
+  ([msg]
+   (if-let [ws (-> (:clients @state) first :ws)]
+     (send! ws msg)))
+  ([client msg]
+   (.send client (pr-str msg))))
 
 (defn start
-  [f & {:keys [ip port] :as opts}]
+  [f & {:keys [ip port]}]
   {:pre [(ifn? f)]}
   (swap! state
-    assoc :server (http/run-server #'handler opts)
-          :channel (promise)
-          :response-fn f))
+    assoc :server (server ip port :str-msg f)
+          :clients #{}
+          :started (promise)))
 
 (defn stop []
   (let [stop-server (:server @state)]
     (when-not (nil? stop-server)
-      (stop-server)
+      (.stop stop-server)
       (reset! state {:server nil
-                     :channel nil
-                     :response-fn nil})
+                     :clients nil
+                     :started nil})
       @state)))
 
 (defn wait-for-client []
-  (deref (:channel @state))
+  (deref (:started @state))
   nil)
 
 (defn restart []

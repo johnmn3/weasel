@@ -1,4 +1,10 @@
-# 0.7.0-SNAPSHOT
+# 0.7.1-SNAPSHOT
+
+## Enhancements
+
+* This is a fork to kick the tires on Java_WebSocket
+
+# 0.7.0
 
 ## Enhancements
 

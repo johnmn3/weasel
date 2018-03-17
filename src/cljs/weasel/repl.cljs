@@ -41,7 +41,7 @@
 (defn repl-print
   [& args]
   (if-let [conn @ws-connection]
-    (net/transmit @ws-connection {:op :print :value (apply pr-str args)})))
+    (net/transmit conn #_ @ws-connection {:op :print :value (apply pr-str args)})))
 
 (defn console-print [& args]
   (.apply (.-log js/console) js/console (into-array args)))
@@ -84,5 +84,4 @@
 
     ;; reusable bootstrap
     (brepl/bootstrap)
-
     (net/connect repl-connection repl-server-url)))

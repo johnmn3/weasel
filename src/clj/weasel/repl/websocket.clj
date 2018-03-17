@@ -4,7 +4,8 @@
             [cljs.closure :as cljsc]
             [cljs.compiler :as cmp]
             [cljs.env :as env]
-            [weasel.repl.server :as server]))
+            [weasel.repl.server :as server])
+  (:import [java.io BufferedReader]))
 
 (def ^:private repl-out
   "stores the value of *out* when the server is started"
@@ -55,18 +56,20 @@
 
 (defmethod process-message
   :ready
-  [_ _])
+  [_ _]
+  (when-not (nil? @client-response)
+    (deliver @client-response :ready)))
 
 (defn- websocket-setup-env
   [this opts]
   (reset! repl-out *out*)
   (server/start
-    (fn [data] (process-message this (read-string data)))
+    (fn [data]
+      (process-message this (read-string (:msg data))))
     :ip (:ip this)
     :port (:port this))
   (let [{:keys [ip pre-connect]} this]
-    (let [port (-> @server/state :server meta :local-port)]
-      (println (str "<< started Weasel server on ws://" ip ":" port " >>")))
+    (println (str "<< started Weasel server on ws://" ip ":" (:port this) " >>"))
     (print "<< waiting for client to connect ... ")
     (flush)
     (when pre-connect (pre-connect))
@@ -93,4 +96,4 @@
     (str "goog.require('" (cmp/munge (first provides)) "')")))
 
 (defn- send-for-eval! [js]
-  (server/send! (pr-str {:op :eval-js, :code js})))
+  (server/send! {:op :eval-js, :code js}))
